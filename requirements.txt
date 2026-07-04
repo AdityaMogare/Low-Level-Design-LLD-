@@ -1,0 +1,2 @@
+# Standard library only for rate_limiter (unittest, threading, abc).
+# Add third-party deps here as other domains grow.
