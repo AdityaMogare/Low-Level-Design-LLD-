@@ -6,6 +6,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest.mock import patch
 
+from rate_limiter.dedup_logger import DedupLogger
 from rate_limiter.interfaces import RateLimiterType
 from rate_limiter.leaky_bucket import LeakyBucketRateLimiter
 from rate_limiter.manager import RateLimiterManager
@@ -130,6 +131,46 @@ class LeakyBucketTests(unittest.TestCase):
         mock_monotonic.return_value = 0.5
         self.assertTrue(limiter.allow_request())
         self.assertFalse(limiter.allow_request())
+
+
+class CompositeKeyTests(unittest.TestCase):
+    @patch("rate_limiter.sliding_window.time.monotonic")
+    def test_endpoints_are_isolated_per_user(self, mock_monotonic) -> None:
+        mock_monotonic.return_value = 0.0
+        manager = RateLimiterManager(
+            RateLimiterType.SLIDING_WINDOW,
+            max_requests=1,
+            window_size_seconds=10.0,
+        )
+
+        self.assertTrue(manager.allow_request("alice", "/api/a"))
+        self.assertFalse(manager.allow_request("alice", "/api/a"))
+        self.assertTrue(manager.allow_request("alice", "/api/b"))
+        self.assertTrue(manager.allow_request("bob", "/api/a"))
+
+
+class DedupLoggerTests(unittest.TestCase):
+    @patch("rate_limiter.dedup_logger.time.monotonic")
+    def test_suppresses_duplicate_within_cooldown(self, mock_monotonic) -> None:
+        mock_monotonic.return_value = 0.0
+        logger = DedupLogger(cooldown_seconds=10.0)
+
+        self.assertTrue(logger.should_log("error: timeout"))
+        self.assertFalse(logger.should_log("error: timeout"))
+        mock_monotonic.return_value = 9.9
+        self.assertFalse(logger.should_log("error: timeout"))
+        mock_monotonic.return_value = 10.0
+        self.assertTrue(logger.should_log("error: timeout"))
+
+    @patch("rate_limiter.dedup_logger.time.monotonic")
+    def test_different_messages_independent(self, mock_monotonic) -> None:
+        mock_monotonic.return_value = 0.0
+        logger = DedupLogger(cooldown_seconds=10.0)
+
+        self.assertTrue(logger.should_log("msg-a"))
+        self.assertTrue(logger.should_log("msg-b"))
+        self.assertFalse(logger.should_log("msg-a"))
+        self.assertFalse(logger.should_log("msg-b"))
 
 
 class ManagerIsolationTests(unittest.TestCase):
